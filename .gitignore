@@ -1,0 +1,6 @@
+.venv/
+.DS_Store
+.env
+
+01_data_acquisition/data
+02_preprocessing/data

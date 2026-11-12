@@ -1,0 +1,21 @@
+# Data acquisition (Stage 1)
+earthengine-api
+python-dotenv
+cdsapi
+
+# Geospatial and array handling
+numpy
+scipy
+pandas
+xarray
+netCDF4
+rasterio
+
+# Modelling (Stages 3-6)
+torch
+torchvision
+
+# Evaluation and plotting
+matplotlib
+scikit-learn
+tqdm
