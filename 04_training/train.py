@@ -17,6 +17,7 @@ Smoke test (Mac): python train.py --variant smoke --iters 50 --data ../02_prepro
                   --ckpt ./ckpt_smoke --code ../common     (PYTORCH_ENABLE_MPS_FALLBACK=1 if MPS complains)
 """
 import argparse
+import copy
 import json
 import sys
 import time
@@ -35,6 +36,7 @@ ap.add_argument("--hard", action="store_true")
 ap.add_argument("--iters", type=int, default=20000)
 ap.add_argument("--bs", type=int, default=32)
 ap.add_argument("--seed", type=int, default=0)
+ap.add_argument("--ema", type=float, default=0.999)  # EMA of generator weights; validation/checkpoints use the EMA copy
 ap.add_argument("--data", default="/content/data/processed")
 ap.add_argument("--ckpt", default="/content/drive/MyDrive/GeoAI_Portfolio/Climate-Downscaling/checkpoints")
 ap.add_argument("--code", default=".")
@@ -170,6 +172,10 @@ if a.adv > 0:
     d = Dis().to(dev)
     od = torch.optim.Adam(d.parameters(), 2e-4, betas=(0.5, 0.999))
 bce = nn.BCEWithLogitsLoss()
+ge = copy.deepcopy(g).eval()  # EMA generator
+sg = torch.optim.lr_scheduler.CosineAnnealingLR(og, a.iters)  # LR 2e-4 -> 0 over training
+if a.adv > 0:
+    sd_ = torch.optim.lr_scheduler.CosineAnnealingLR(od, a.iters)
 out_dir = Path(a.ckpt) / a.variant
 out_dir.mkdir(parents=True, exist_ok=True)
 best, hist, t0 = float("inf"), [], time.time()
@@ -190,14 +196,20 @@ for it in range(1, a.iters + 1):
     og.zero_grad()
     loss.backward()
     og.step()
+    sg.step()
+    if a.adv > 0:
+        sd_.step()
+    with torch.no_grad():
+        for pe, p in zip(ge.parameters(), g.parameters()):
+            pe.lerp_(p, 1 - a.ema)
 
     if it % 500 == 0:
         print(f"it {it} mse {mse.item():.4f} phys {phys.item():.4f} ({time.time() - t0:.0f}s)")
     if it % 2000 == 0 or it == a.iters:
-        v = validate(g)
+        v = validate(ge)
         hist.append({"it": it, **v})
         print("  val", {k: round(x, 3) for k, x in v.items()})
-        ck = {"g": g.state_dict(), "it": it, "args": vars(a), "val": v, "hist": hist}
+        ck = {"g": ge.state_dict(), "it": it, "args": vars(a), "val": v, "hist": hist}
         torch.save(ck, out_dir / "latest.pt")
         if v["rmse"] < best:
             best = v["rmse"]
