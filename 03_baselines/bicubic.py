@@ -20,13 +20,15 @@ from metrics import evaluate  # noqa: E402
 
 P = Path("../02_preprocessing/data/processed")
 meta = json.loads((P / "meta.json").read_text())
-a, b = meta["split_day_index"]["test"]
+split = sys.argv[1] if len(sys.argv) > 1 else "test"
+step = 4 if split == "val" else 1  # val uses every 4th day, same as train.py
+a, b = meta["split_day_index"][split]
 
-truth = np.load(P / "chirps_daily.npy", mmap_mode="r")[a:b].copy()
-coarse = np.load(P / "coarse_daily.npy", mmap_mode="r")[a:b].copy()
+truth = np.load(P / "chirps_daily.npy", mmap_mode="r")[a:b:step].copy()
+coarse = np.load(P / "coarse_daily.npy", mmap_mode="r")[a:b:step].copy()
 mask = np.load(P / "land_mask.npy")
 
-days = [dt.date(2001, 1, 1) + dt.timedelta(i) for i in range(a, b)]
+days = [dt.date(2001, 1, 1) + dt.timedelta(i) for i in range(a, b, step)]
 jjas = np.array([d.month in (6, 7, 8, 9) for d in days])
 
 x = torch.from_numpy(coarse)[:, None]
@@ -46,4 +48,4 @@ for name, pred in preds.items():
         print(name, k, {m: round(val, 3) for m, val in v.items()})
 
 Path("results").mkdir(exist_ok=True)
-Path("results/baselines.json").write_text(json.dumps(results, indent=2))
+Path(f"results/baselines_{split}.json").write_text(json.dumps(results, indent=2))
