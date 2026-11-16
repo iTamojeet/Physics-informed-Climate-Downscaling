@@ -122,6 +122,19 @@ def radial_spectrum(x, step=5, nb=25):
     return 0.5 * (edges[1:] + edges[:-1]), ps
 
 
+def lattice_score(x, step=5):
+    """Peak-to-background power at the 5-pixel lattice frequencies (0.2 and 0.4 cycles/px and their
+    2D combinations). Sub-pixel-shuffle checkerboard artefacts raise this; real rain fields do not."""
+    p = (np.abs(np.fft.fft2(x[::step].astype("float64"))) ** 2).mean(axis=0)
+    H, W = p.shape
+    fy, fx = H // F5, W // F5
+    sc = []
+    for n, m in [(0, fx), (fy, 0), (fy, fx), (0, 2 * fx), (2 * fy, 0), (2 * fy, 2 * fx), (fy, 2 * fx), (2 * fy, fx)]:
+        win = p[max(n - 4, 0):n + 5, max(m - 4, 0):m + 5]
+        sc.append(p[n, m] / ((win.sum() - p[n, m]) / (win.size - 1)))
+    return float(np.mean(sc))
+
+
 # ---------------- predictions ----------------
 x = torch.from_numpy(coarse)[:, None]
 preds = {
@@ -150,12 +163,13 @@ for name, pred in preds.items():
     for tag, sel in (("all_days", slice(None)), ("jjas", jjas)):
         r = evaluate(pred[sel], truth[sel], coarse[sel], mask)
         r["grad_ratio"] = grad_ratio(pred[sel], truth[sel])
+        r["lattice_ratio"] = lattice_score(np.where(mask, pred[sel], 0)) / lattice_score(truth[sel])
         results[name][tag] = r
 Path("results").mkdir(exist_ok=True)
 Path("figures").mkdir(exist_ok=True)
 Path(f"results/{a.split}_results.json").write_text(json.dumps(results, indent=2))
 
-cols = ["rmse", "mae", "conservation", "p99_bias_pct", "wet_freq_ratio", "subcoarse_power", "grad_ratio"]
+cols = ["rmse", "mae", "conservation", "p99_bias_pct", "wet_freq_ratio", "subcoarse_power", "grad_ratio", "lattice_ratio"]
 for tag in ("all_days", "jjas"):
     print(f"\n== {a.split} {tag} ==")
     print(f"{'model':28s}" + "".join(f"{c[:11]:>12s}" for c in cols))
@@ -192,6 +206,8 @@ for n, p in primary.items():
     ax.loglog(kk[1:], ps[1:], lw=1.2, label=n.replace("/latest", ""))
 ax.axvline(0.1, color="grey", ls="--", lw=0.8)
 ax.text(0.102, ax.get_ylim()[0] * 3, "0.25 deg\nNyquist", fontsize=7, color="grey")
+ax.xaxis.set_minor_formatter(plt.NullFormatter())
+ax.yaxis.set_minor_formatter(plt.NullFormatter())
 ax.set_xlabel("radial frequency (cycles / 0.05 deg pixel)")
 ax.set_ylabel("power")
 ax.legend(fontsize=7)
