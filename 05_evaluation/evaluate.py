@@ -73,11 +73,13 @@ class Res(nn.Module):  # identical to train.py so state_dict keys match
 
 
 class G(nn.Module):
-    def __init__(s, c=64, n=8):
+    def __init__(s, c=64, n=8, up="shuffle"):
         super().__init__()
         s.head = nn.Conv2d(2, c, 3, padding=1)
         s.body = nn.Sequential(*[Res(c) for _ in range(n)])
-        s.up = nn.Sequential(nn.Conv2d(c, c * F5 * F5, 3, padding=1), nn.PixelShuffle(F5), nn.PReLU())
+        s.up = (nn.Sequential(nn.Upsample(scale_factor=F5, mode="nearest"), nn.Conv2d(c, c, 3, padding=1), nn.PReLU())
+                if up == "resize" else
+                nn.Sequential(nn.Conv2d(c, c * F5 * F5, 3, padding=1), nn.PixelShuffle(F5), nn.PReLU()))
         s.tail = nn.Sequential(nn.Conv2d(c + 1, c, 3, padding=1), nn.PReLU(), nn.Conv2d(c, 1, 3, padding=1))
 
     def forward(s, xc, dem_f):
@@ -135,6 +137,20 @@ def lattice_score(x, step=5):
     return float(np.mean(sc))
 
 
+def edge_ratio(x):
+    """Mean |jump| across 5x5 block borders / mean |jump| inside blocks (land pairs only).
+    Multiplicative block rescaling can create steps at block borders; nearest-neighbour is the extreme."""
+    x = np.where(mask, x[::5], 0)
+    out = []
+    for ax in (1, 2):
+        d = np.abs(np.diff(x, axis=ax))
+        valid = (mask[1:] & mask[:-1]) if ax == 1 else (mask[:, 1:] & mask[:, :-1])
+        pos = np.arange(d.shape[ax]) % F5 == F5 - 1
+        pos = pos[:, None] if ax == 1 else pos[None, :]
+        out.append(d[:, valid & pos].mean() / d[:, valid & ~pos].mean())
+    return float(np.mean(out))
+
+
 # ---------------- predictions ----------------
 x = torch.from_numpy(coarse)[:, None]
 preds = {
@@ -148,7 +164,7 @@ for vdir in sorted(p for p in Path(a.ckpt).iterdir() if p.is_dir()):
         if not f.exists():
             continue
         ck = torch.load(f, map_location="cpu", weights_only=False)
-        g = G().to(dev)
+        g = G(up=ck["args"].get("up", "shuffle")).to(dev)
         g.load_state_dict(ck["g"])
         g.eval()
         name = f"{vdir.name}/{which}"
@@ -164,12 +180,13 @@ for name, pred in preds.items():
         r = evaluate(pred[sel], truth[sel], coarse[sel], mask)
         r["grad_ratio"] = grad_ratio(pred[sel], truth[sel])
         r["lattice_ratio"] = lattice_score(np.where(mask, pred[sel], 0)) / lattice_score(truth[sel])
+        r["edge_ratio"] = edge_ratio(pred[sel]) / edge_ratio(truth[sel])
         results[name][tag] = r
 Path("results").mkdir(exist_ok=True)
 Path("figures").mkdir(exist_ok=True)
 Path(f"results/{a.split}_results.json").write_text(json.dumps(results, indent=2))
 
-cols = ["rmse", "mae", "conservation", "p99_bias_pct", "wet_freq_ratio", "subcoarse_power", "grad_ratio", "lattice_ratio"]
+cols = ["rmse", "mae", "conservation", "p99_bias_pct", "wet_freq_ratio", "subcoarse_power", "grad_ratio", "lattice_ratio", "edge_ratio"]
 for tag in ("all_days", "jjas"):
     print(f"\n== {a.split} {tag} ==")
     print(f"{'model':28s}" + "".join(f"{c[:11]:>12s}" for c in cols))
